@@ -85,6 +85,50 @@ func TestPromise_ResolveAsync(t *testing.T) {
 	}
 }
 
+func TestDeferredPromise_Resolve(t *testing.T) {
+	testCtx := context.Background()
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			prom, ctx, cancel := newDeferredPromise(t, testCtx)
+			defer cancel()
+
+			assert.False(t, prom.Started())
+			prom.Run(ctx, resolveFn(tc.fnWait))
+			assert.True(t, prom.Started())
+
+			res := prom.Resolve()
+
+			assertPromiseResolveTests(t, tc, prom, res)
+		})
+	}
+}
+
+func TestDeferredPromise_ResolveAsync(t *testing.T) {
+	testCtx := context.Background()
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			prom, ctx, cancel := newDeferredPromise(t, testCtx)
+			defer cancel()
+
+			assert.False(t, prom.Started())
+			prom.Run(ctx, resolveFn(tc.fnWait))
+			assert.True(t, prom.Started())
+
+			resChan := prom.ResolveAsync()
+
+			for {
+				select {
+				case res := <-resChan:
+					assertPromiseResolveTests(t, tc, prom, res)
+					return
+				}
+			}
+		})
+	}
+}
+
 func newPromise(t *testing.T, ctx context.Context, fnWait time.Duration) (promise.Promise[uint], context.Context, context.CancelFunc) {
 	t.Helper()
 
@@ -93,7 +137,15 @@ func newPromise(t *testing.T, ctx context.Context, fnWait time.Duration) (promis
 	return promise.NewPromise(promCtx, resolveFn(fnWait)), promCtx, cancel
 }
 
-func assertPromiseResolveTests[T any](t *testing.T, tc testCase, prom promise.Promise[T], res promise.Result[T]) {
+func newDeferredPromise(t *testing.T, ctx context.Context) (promise.DeferredPromise[uint], context.Context, context.CancelFunc) {
+	t.Helper()
+
+	promCtx, cancel := context.WithTimeout(ctx, ctxTimeout)
+
+	return promise.NewDeferredPromise[uint](), promCtx, cancel
+}
+
+func assertPromiseResolveTests(t *testing.T, tc testCase, prom promise.Promise[uint], res promise.Result[uint]) {
 	if tc.wantErr {
 		assert.True(t, prom.Rejected())
 		assert.False(t, prom.Fulfilled())

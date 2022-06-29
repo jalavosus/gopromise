@@ -29,6 +29,22 @@ type Promise[T any] interface {
 	Rejected() bool
 }
 
+// DeferredPromise is a Promise which isn't initialized with a Func;
+// instead, a DeferredPromise begins its lifecycle when Run is called.
+type DeferredPromise[T any] interface {
+	Promise[T]
+
+	// Run causes the DeferredPromise to call the passed Func,
+	// thus starting the Promise lifecycle.
+	// Run is multiprocess-safe: after the first call, subsequent calls
+	// will do nothing.
+	Run(context.Context, Func[T])
+
+	// Started returns whether or not Run has been called for
+	// this DeferredPromise.
+	Started() bool
+}
+
 // Result is the result data returned by a function
 // called by a Promise.
 type Result[T any] interface {
@@ -62,19 +78,30 @@ type promise[T any] struct {
 // NewPromise returns a Promise. Upon instantiation, the passed Func is called in a goroutine
 // which stores the returned data/error.
 func NewPromise[T any](ctx context.Context, fn Func[T]) Promise[T] {
+	p := newPromise[T]()
+	p.run(ctx, fn)
+
+	return p
+}
+
+func newPromise[T any]() *promise[T] {
 	p := new(promise[T])
 	p.ch = make(chan Result[T], 1)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 	p.wg = &wg
-
-	go p.run(ctx, fn)
 
 	return p
 }
 
 func (p *promise[T]) run(ctx context.Context, fn Func[T]) {
+	p.once.Do(func() {
+		p.wg.Add(1)
+		go p.doFn(ctx, fn)
+	})
+}
+
+func (p *promise[T]) doFn(ctx context.Context, fn Func[T]) {
 	defer p.wg.Done()
 
 	promRes := new(promiseResult[T])
@@ -115,6 +142,54 @@ func (p *promise[T]) Fulfilled() bool {
 func (p *promise[T]) Rejected() bool {
 	if res := p.loadResult(); res != nil {
 		return res.Err() != nil
+	}
+
+	return false
+}
+
+type deferredPromise[T any] struct {
+	*promise[T]
+	started atomic.Bool
+}
+
+// NewDeferredPromise returns a DeferredPromise.
+func NewDeferredPromise[T any]() DeferredPromise[T] {
+	p := new(deferredPromise[T])
+	p.promise = newPromise[T]()
+
+	return p
+}
+
+func (p *deferredPromise[T]) Run(ctx context.Context, fn Func[T]) {
+	if !p.Started() {
+		p.run(ctx, fn)
+		p.started.Store(true)
+	}
+}
+
+func (p *deferredPromise[T]) Started() bool {
+	return p.started.Load()
+}
+
+func (p *deferredPromise[T]) Resolve() Result[T] {
+	return p.promise.Resolve()
+}
+
+func (p *deferredPromise[T]) ResolveAsync() <-chan Result[T] {
+	return p.promise.ResolveAsync()
+}
+
+func (p *deferredPromise[T]) Fulfilled() bool {
+	if p.Started() {
+		return p.promise.Fulfilled()
+	}
+
+	return false
+}
+
+func (p *deferredPromise[T]) Rejected() bool {
+	if p.Started() {
+		return p.promise.Rejected()
 	}
 
 	return false
