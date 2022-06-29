@@ -2,6 +2,7 @@ package promise_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,43 +39,44 @@ func TestDeferredPromise_ResolveAsync(t *testing.T) {
 func TestDeferredPromise_Run(t *testing.T) {
 	testCtx := context.Background()
 
-	const wantVal uint = 1
+	const wantVal uint32 = 1
 
 	var (
-		counter   uint = 0
-		counterCh      = make(chan uint, 2)
+		counter   atomic.Uint32
+		counterCh = make(chan uint32, 2)
 	)
 
-	var fn promise.Func[uint] = func(_ context.Context, rest ...any) (uint, error) {
-		counter++
+	var fn promise.Func[uint32] = func(_ context.Context, rest ...any) (uint32, error) {
+		counter.Add(1)
+		val := counter.Load()
 
 		if len(rest) == 1 {
-			ch, ok := rest[0].(chan uint)
+			ch, ok := rest[0].(chan uint32)
 			if ok {
-				ch <- counter
+				ch <- val
 			}
 		}
 
-		return counter, nil
+		return val, nil
 	}
 
-	prom := promise.NewDeferredPromise[uint]()
+	prom := promise.NewDeferredPromise[uint32]()
 
 	prom.Run(testCtx, fn, counterCh)
 	<-counterCh
 
 	assert.True(t, prom.Started())
-	assert.Equal(t, wantVal, counter)
+	assert.Equal(t, wantVal, counter.Load())
 
-	t.Run("ensure Run() only calls fn once", func(t *testing.T) {
+	t.Run("fn-called-once", func(t *testing.T) {
 		assert.True(t, prom.Started())
 
-		prom.Run(testCtx, fn, counterCh)
-
 		var (
-			counterVal = counter
+			counterVal = counter.Load()
 			ctxErr     error
 		)
+
+		prom.Run(testCtx, fn, counterCh)
 
 		ctx, cancel := context.WithTimeout(testCtx, 3*time.Second)
 		defer cancel()
@@ -91,9 +93,10 @@ func TestDeferredPromise_Run(t *testing.T) {
 			}
 		}
 
+		assert.Error(t, ctxErr)
 		assert.ErrorIs(t, context.DeadlineExceeded, ctxErr)
 		assert.Equal(t, wantVal, counterVal)
-		assert.Equal(t, wantVal, counter)
+		assert.Equal(t, wantVal, counter.Load())
 
 		res := prom.Resolve()
 		resVal := res.Result()
