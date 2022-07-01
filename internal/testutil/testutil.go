@@ -13,21 +13,47 @@ import (
 const ctxTimeout = 2 * time.Second
 
 type TestCase struct {
-	name    string
-	wantErr bool
-	fnWait  time.Duration
+	name       string
+	fnWait     time.Duration
+	assertions TestAssertions
+}
+
+type TestAssertions struct {
+	AssertFulfilled assert.BoolAssertionFunc
+	AssertRejected  assert.BoolAssertionFunc
+	AssertResult    assert.ValueAssertionFunc
+	AssertErr       assert.ErrorAssertionFunc
+}
+
+func NewTestAssertions(wantFulfilled, wantRes, wantErr bool) TestAssertions {
+	return TestAssertions{
+		AssertFulfilled: BoolAssertion(wantFulfilled),
+		AssertRejected:  BoolAssertion(!wantFulfilled),
+		AssertResult:    NilAssertion(!wantRes),
+		AssertErr:       ErrorAssertion(wantErr),
+	}
+}
+
+func (ta TestAssertions) AssertAll(t *testing.T, prom promise.Promise[uint], res promise.Result[uint]) {
+	t.Helper()
+
+	ta.AssertFulfilled(t, prom.Fulfilled())
+	ta.AssertRejected(t, prom.Rejected())
+
+	ta.AssertResult(t, res.Result())
+	ta.AssertErr(t, res.Err())
 }
 
 var testCases = []TestCase{
 	{
-		name:    "timeout-occurs=false",
-		fnWait:  1500 * time.Millisecond,
-		wantErr: false,
+		name:       "timeout-occurs=false",
+		fnWait:     1500 * time.Millisecond,
+		assertions: NewTestAssertions(true, true, false),
 	},
 	{
-		name:    "timeout-occurs=true",
-		fnWait:  2050 * time.Millisecond,
-		wantErr: true,
+		name:       "timeout-occurs=true",
+		fnWait:     2050 * time.Millisecond,
+		assertions: NewTestAssertions(false, false, true),
 	},
 }
 
@@ -76,10 +102,14 @@ func TestResolve(
 	resolveAsync bool,
 ) {
 
+	t.Helper()
+
 	testCtx := context.Background()
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Helper()
+
 			ctx, cancel := newContext(testCtx)
 			defer cancel()
 
@@ -102,25 +132,7 @@ func TestResolve(
 				res = prom.Resolve()
 			}
 
-			assertPromiseResolveTests(t, tc, prom, res)
+			tc.assertions.AssertAll(t, prom, res)
 		})
-	}
-}
-
-func assertPromiseResolveTests(t *testing.T, tc TestCase, prom promise.Promise[uint], res promise.Result[uint]) {
-	t.Helper()
-
-	if tc.wantErr {
-		assert.True(t, prom.Rejected())
-		assert.False(t, prom.Fulfilled())
-
-		assert.Nil(t, res.Result())
-		assert.Error(t, res.Err())
-	} else {
-		assert.True(t, prom.Fulfilled())
-		assert.False(t, prom.Rejected())
-
-		assert.NotNil(t, res.Result())
-		assert.NoError(t, res.Err())
 	}
 }

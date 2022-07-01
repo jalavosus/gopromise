@@ -19,6 +19,8 @@ func newDeferredPromise(t *testing.T, _ promise.Func[uint]) promise.Promise[uint
 }
 
 func runDeferredPromise(t *testing.T, fn promise.Func[uint], pprom promise.Promise[uint]) {
+	t.Helper()
+	
 	prom := pprom.(promise.DeferredPromise[uint])
 
 	t.Run("ensure bools are false", func(t *testing.T) {
