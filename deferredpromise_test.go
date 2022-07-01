@@ -13,18 +13,21 @@ import (
 	"github.com/jalavosus/gopromise/internal/testutil"
 )
 
-func newDeferredPromise(t *testing.T, _ context.Context, _ promise.Func[uint]) promise.Promise[uint] {
+func newDeferredPromise(t *testing.T, _ promise.Func[uint]) promise.Promise[uint] {
 	t.Helper()
 	return promise.NewDeferredPromise[uint]()
 }
 
-func runDeferredPromise(t *testing.T, ctx context.Context, fn promise.Func[uint], pprom promise.Promise[uint]) {
+func runDeferredPromise(t *testing.T, fn promise.Func[uint], pprom promise.Promise[uint]) {
 	prom := pprom.(promise.DeferredPromise[uint])
 
-	assert.False(t, prom.Started())
-	assert.False(t, prom.Fulfilled())
-	assert.False(t, prom.Rejected())
-	prom.Run(ctx, fn)
+	t.Run("ensure bools are false", func(t *testing.T) {
+		assert.False(t, prom.Started())
+		assert.False(t, prom.Fulfilled())
+		assert.False(t, prom.Rejected())
+	})
+
+	prom.Run(fn)
 	assert.True(t, prom.Started())
 }
 
@@ -46,29 +49,24 @@ func TestDeferredPromise_Run(t *testing.T) {
 		counterCh = make(chan uint32, 2)
 	)
 
-	var fn promise.Func[uint32] = func(_ context.Context, rest ...any) (uint32, error) {
+	var fn promise.Func[uint32] = func(resolve promise.ResolveFunc[uint32], _ promise.RejectFunc) {
 		counter.Add(1)
 		val := counter.Load()
-
-		if len(rest) == 1 {
-			ch, ok := rest[0].(chan uint32)
-			if ok {
-				ch <- val
-			}
-		}
-
-		return val, nil
+		counterCh <- val
+		resolve(val)
 	}
 
 	prom := promise.NewDeferredPromise[uint32]()
 
-	prom.Run(testCtx, fn, counterCh)
-	<-counterCh
+	t.Run("fn called", func(t *testing.T) {
+		prom.Run(fn)
 
-	assert.True(t, prom.Started())
-	assert.Equal(t, wantVal, counter.Load())
+		assert.Equal(t, wantVal, <-counterCh)
+		assert.True(t, prom.Started())
+		assert.Equal(t, wantVal, counter.Load())
+	})
 
-	t.Run("fn-called-once", func(t *testing.T) {
+	t.Run("fn not called again", func(t *testing.T) {
 		assert.True(t, prom.Started())
 
 		var (
@@ -76,7 +74,7 @@ func TestDeferredPromise_Run(t *testing.T) {
 			ctxErr     error
 		)
 
-		prom.Run(testCtx, fn, counterCh)
+		prom.Run(fn)
 
 		ctx, cancel := context.WithTimeout(testCtx, 3*time.Second)
 		defer cancel()

@@ -1,7 +1,6 @@
 package promise
 
 import (
-	"context"
 	"sync/atomic"
 )
 
@@ -14,7 +13,7 @@ type DeferredPromise[T any] interface {
 	// thus starting the Promise lifecycle.
 	// Run is multiprocess-safe: after the first call, subsequent calls
 	// will do nothing.
-	Run(context.Context, Func[T], ...any)
+	Run(Func[T])
 
 	// Started returns whether or not Run has been called for
 	// this DeferredPromise.
@@ -34,9 +33,9 @@ func NewDeferredPromise[T any]() DeferredPromise[T] {
 	return p
 }
 
-func (p *deferredPromise[T]) Run(ctx context.Context, fn Func[T], fnArgs ...any) {
+func (p *deferredPromise[T]) Run(fn Func[T]) {
 	if !p.Started() {
-		p.run(ctx, fn, fnArgs...)
+		p.run(fn)
 		p.started.Store(true)
 	}
 }

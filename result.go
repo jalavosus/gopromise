@@ -15,6 +15,7 @@ type promiseResult[T any] struct {
 	result    T
 	err       error
 	fulfilled bool
+	rejected  bool
 }
 
 func (r *promiseResult[T]) Result() *T {
@@ -26,5 +27,9 @@ func (r *promiseResult[T]) Result() *T {
 }
 
 func (r *promiseResult[T]) Err() error {
-	return r.err
+	if r.rejected {
+		return r.err
+	}
+
+	return nil
 }

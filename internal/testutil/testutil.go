@@ -15,25 +15,25 @@ const ctxTimeout = 2 * time.Second
 type TestCase struct {
 	name    string
 	wantErr bool
-	resolve promise.Func[uint]
+	fnWait  time.Duration
 }
 
 var testCases = []TestCase{
 	{
 		name:    "timeout-occurs=false",
-		resolve: makePromiseResolver(1500 * time.Millisecond),
+		fnWait:  1500 * time.Millisecond,
 		wantErr: false,
 	},
 	{
 		name:    "timeout-occurs=true",
-		resolve: makePromiseResolver(2050 * time.Millisecond),
+		fnWait:  2050 * time.Millisecond,
 		wantErr: true,
 	},
 }
 
 type (
-	PromiseMaker      func(*testing.T, context.Context, promise.Func[uint]) promise.Promise[uint]
-	PromiseTestRunner func(*testing.T, context.Context, promise.Func[uint], promise.Promise[uint])
+	PromiseMaker      func(*testing.T, promise.Func[uint]) promise.Promise[uint]
+	PromiseTestRunner func(*testing.T, promise.Func[uint], promise.Promise[uint])
 	PromiseResolver   func(*testing.T, promise.Promise[uint]) promise.Result[uint]
 )
 
@@ -41,20 +41,29 @@ func newContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, ctxTimeout)
 }
 
-func makePromiseResolver(fnWait time.Duration) promise.Func[uint] {
+func makePromiseResolver(ctx context.Context, fnWait time.Duration) promise.Func[uint] {
 	const res uint = 42
 
-	return func(ctx context.Context, _ ...any) (uint, error) {
+	return func(resolve promise.ResolveFunc[uint], reject promise.RejectFunc) {
 		ticker := time.NewTicker(fnWait)
+
+		defer func() {
+			ticker.Stop()
+		}()
 
 		for {
 			select {
 			case <-ctx.Done():
-				ticker.Stop()
-				return res, ctx.Err()
+				if err := ctx.Err(); err != nil {
+					reject(err)
+				} else {
+					resolve(res)
+				}
+
+				return
 			case <-ticker.C:
-				ticker.Stop()
-				return res, nil
+				resolve(res)
+				return
 			}
 		}
 	}
@@ -74,10 +83,11 @@ func TestResolve(
 			ctx, cancel := newContext(testCtx)
 			defer cancel()
 
-			prom := newProm(t, ctx, tc.resolve)
-
 			var res promise.Result[uint]
-			runProm(t, ctx, tc.resolve, prom)
+
+			promFn := makePromiseResolver(ctx, tc.fnWait)
+			prom := newProm(t, promFn)
+			runProm(t, promFn, prom)
 
 			if resolveAsync {
 			ResolveAsyncLoop:

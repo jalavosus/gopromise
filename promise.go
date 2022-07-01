@@ -1,14 +1,9 @@
 package promise
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 )
-
-// Func is any function which takes a Context and returns
-// a given type + error.
-type Func[T any] func(context.Context, ...any) (T, error)
 
 // Promise provides an interface for types
 // which fetch data or calculate results asyncronously,
@@ -34,17 +29,18 @@ type Promise[T any] interface {
 }
 
 type promise[T any] struct {
-	result atomic.Pointer[promiseResult[T]]
-	once   sync.Once
-	wg     *sync.WaitGroup
-	ch     chan Result[T]
+	result   atomic.Pointer[promiseResult[T]]
+	callOnce sync.Once
+	setOnce  sync.Once
+	wg       *sync.WaitGroup
+	ch       chan Result[T]
 }
 
 // NewPromise returns a Promise. Upon instantiation, the passed Func is called in a goroutine
 // which stores the returned data/error.
-func NewPromise[T any](ctx context.Context, fn Func[T], fnArgs ...any) Promise[T] {
+func NewPromise[T any](fn Func[T]) Promise[T] {
 	p := newPromise[T]()
-	p.run(ctx, fn, fnArgs...)
+	p.run(fn)
 
 	return p
 }
@@ -59,33 +55,33 @@ func newPromise[T any]() *promise[T] {
 	return p
 }
 
-func (p *promise[T]) run(ctx context.Context, fn Func[T], fnArgs ...any) {
-	p.once.Do(func() {
-		p.wg.Add(1)
-		go p.doFn(ctx, fn, fnArgs...)
+func (p *promise[T]) run(fn Func[T]) {
+	p.callOnce.Do(func() {
+		go p.doFn(fn)
 		return
 	})
 }
 
-func (p *promise[T]) doFn(ctx context.Context, fn Func[T], fnArgs ...any) {
-	defer p.wg.Done()
-
-	promRes := new(promiseResult[T])
-	promRes.result, promRes.err = fn(ctx, fnArgs...)
-	if promRes.err == nil {
-		promRes.fulfilled = true
-	}
-
-	p.setResult(promRes)
+func (p *promise[T]) doFn(fn Func[T]) {
+	ch := make(chan *promiseResult[T], 1)
+	go fn(p.resolveFunc(ch), p.rejectFunc(ch))
+	res := <-ch
+	p.setResult(res)
+	return
 }
 
 func (p *promise[T]) setResult(res *promiseResult[T]) {
-	p.result.Store(res)
-	p.ch <- res
+	p.setOnce.Do(func() {
+		p.result.Store(res)
+		p.ch <- res
+	})
 }
 
 func (p *promise[T]) Resolve() Result[T] {
-	p.wg.Wait()
+	if res := p.loadResult(); res != nil {
+		return res
+	}
+
 	return <-p.ch
 }
 
@@ -94,12 +90,18 @@ func (p *promise[T]) loadResult() *promiseResult[T] {
 }
 
 func (p *promise[T]) ResolveAsync() <-chan Result[T] {
+	if res := p.loadResult(); res != nil {
+		ch := make(chan Result[T], 1)
+		ch <- res
+		return ch
+	}
+
 	return p.ch
 }
 
 func (p *promise[T]) Fulfilled() bool {
 	if res := p.loadResult(); res != nil {
-		return res.Result() != nil && res.Err() == nil
+		return res.fulfilled
 	}
 
 	return false
@@ -107,7 +109,7 @@ func (p *promise[T]) Fulfilled() bool {
 
 func (p *promise[T]) Rejected() bool {
 	if res := p.loadResult(); res != nil {
-		return res.Err() != nil
+		return res.rejected
 	}
 
 	return false
